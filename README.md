@@ -2,8 +2,6 @@
 
 1. We want to show that acoustic indices correlate with hill number (an ecologically more meaningful number as species are weighted by their calls)
 
-To achieve that:
-
 hill number ~ acoustic indices + ordinal day + NDVI
 
 2. We can use acoustic indices to track phenology
@@ -12,5 +10,4 @@ Show how acoustic indices vary at the different sites. For instance, in spring w
 
 Acoustic Indices vs number of days over certain temperature / over day length days (more sun)
 
-# /data/P-Prosjekter2/132404_tambon/rscript/rscript.Rproj
 
