@@ -1,15 +1,26 @@
 library(tidyverse)
 library(zoo)
 
-df <- read.table("selected_indices.txt", sep=",")
+df2 <- read.table("selected_indices.txt", sep=",", fill=TRUE)
+
+df <- read.table("output.txt", sep=",", fill=TRUE) %>% 
+  drop_na() 
 
 ################################
 # Indices computed as colnames #
 ################################
-INDICES=c("EVNsp", "MFC", "ROItotal", "ROIcover", "ACI", "BI", "roughness")
+INDICES=c("EVNsp_mean", "EVNsp_median", "EVNsp_std",
+          "EVNspFract", "EVNspMean", "EVNspCount", 
+          "MFC", "ROItotal", "ROIcover", "ACI", "BI", 
+          "roughnessMean", "roughnessMedian", "roughnesStd",
+          "EVNtFraction", "EVNtMean", "EVNtFraction", "EVNtMean",
+          "ACTtCount", "ACTtMean"
+          )
 FILENAMES="filename"
 headers <- c(INDICES, FILENAMES)
 colnames(df) <- headers 
+
+df <- df[, -c(17, 18)]
 
 #################################
 # Extract location and datetime #
@@ -30,7 +41,6 @@ df$datetime <- as.POSIXct(df$datetime, format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
 # COMBINE THE DATASET #
 #######################
 sub_indices <- df %>% 
-  #select(file, location, datetime, NDSI, Ht, Hf, ACI, MFC, AEI, BI, ADI) %>% 
   drop_na() %>% 
   filter(location != "bugg_RPiID-1000000036c12906" & 
            location != "bugg_RPiID-10000000dda66772") 
@@ -38,13 +48,13 @@ sub_indices <- df %>%
 # In correlation with bird calls
 annotations = read_csv("birdnet_lite_detections-proj_sound-of-norway-yr2complete.csv")
 annotations_filtered <- annotations %>% 
-  select(audio_link, tags, confidence, detected_time, longitude, latitude) %>% 
+  select(audio_link, tags, confidence, detected_time) %>% 
   mutate(file = sub(".*?proj_sound-of-norway/(.*)", "proj_sound-of-norway/\\1", audio_link)) %>% 
   select(!audio_link)
 
 # Get site and location
 site_recorder_correspondance <- annotations %>% 
-  select(location = recorder, site) %>% 
+  select(location = recorder, site, longitude, latitude) %>% 
   distinct()
 
 # Join the sites

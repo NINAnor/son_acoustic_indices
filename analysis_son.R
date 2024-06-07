@@ -9,7 +9,7 @@ library(vegan)  # for diversity calculation
 library(glmmTMB)
 library(broom.mixed)
 library(caret)
-
+library(usdm)
 
 ###################
 # GET THE DATASET #
@@ -21,7 +21,11 @@ library(caret)
 # VARIABLE COMBINING ALL THE VARIABLES OF INTEREST #
 ####################################################
 
-ACOUSTIC_VAR <- c("EVNsp", "MFC", "ROItotal", "ROIcover", "ACI", "BI", "roughness")
+ACOUSTIC_VAR <- c("EVNspFract", "EVNspMean", "EVNspCount", 
+                  "MFC", "ROItotal", "ROIcover", "ACI", "BI", 
+                  "roughnessMean", "roughnessMedian", "roughnesStd",
+                  "EVNtFraction", "EVNtMean",
+                  "ACTtCount", "ACTtMean")
 CONFIDENCE = 0.8
 
 ############################################################
@@ -32,96 +36,58 @@ df_annotated %>%
   select(all_of(ACOUSTIC_VAR)) %>% 
   drop_na() %>% 
   cor(.)
+df_annotated[sapply(df_annotated, is.infinite)] <- NA
 
-###################################
-####### DATA VIZ ##################
-###################################
+#### Variance Inflation Factors ####
 
-# indices at locations
-df_annotated %>% 
-  select(all_of(ACOUSTIC_VAR), site) %>% 
-  group_by(site) %>% 
-  summarise_all(.funs="mean") %>% 
-  pivot_longer(!site, names_to = "indice", values_to = "value") %>% 
-  ggplot(., aes(x=site, y=value)) +
-  geom_point() +
-  facet_wrap(~indice, scales="free") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+# From the manual for the usdm package "Collinearity causes instability in parameter estimation in regression-type 
+#models. The VIF is based on the square of the multiple correlation coefficient resulting from regressing a 
+#predictor variable against all other predictor variables. If a variable has a strong linear relationship 
+#with at least one of the other variables, the correlation coefficient will be close to 1, and VIF for that 
+#variable would be large."
 
-# Indices vs time
-df_annotated %>% 
-  select(all_of(ACOUSTIC_VAR), week) %>% 
-  group_by(week) %>% 
-  summarise_all(.funs="mean") %>% 
-  pivot_longer(!week, names_to = "indice", values_to = "value") %>% 
-  ggplot(., aes(x=week, y=value)) +
-  geom_point() +
-  facet_wrap(~indice, scales="free") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+# Two options for VIFs: vifcor and vifstep. The latter is the option used by Geue & Thomassen (2020) 
+#Functions "exclude highly collinear variables in a stepwise procedure".
 
-#################################################################################
-# Make the df for number of calls, species richness and number of func. species #
-#################################################################################
+# "vifcor" first finds the pair of variables with the maximum linear correlation (greater than "th" threshold), 
+#and excludes the one with the greater VIF. The procedure is repeated until no variable has a high 
+#correlation coefficient (greater than threshold) with other variables.
 
-# DF that summarises the number of calls
-df_processed <- df_annotated %>% 
-  filter(tags != "None") %>%
-  filter(confidence > CONFIDENCE) %>% 
-  select(!filename, site) %>% 
-  mutate(tags_number = ifelse(is.na(tags), 0, 1)) %>% 
-  group_by(week, site) %>% 
-  summarise(across(all_of(ACOUSTIC_VAR), mean, na.rm=TRUE),
-            n_calls = sum(tags_number),
-            n_species = n_distinct(tags, na.rm = TRUE),
-            hill_number = exp(diversity(table(tags), index = "shannon")))  # Hill number for q = 1
+# "vifstep" calculates the VIF for all variables, excludes the one with highest VIF (greater than threshold), 
+#and repeats the procedure until no variables with VIF greater than "th" remains.
 
-#################################
-##########  PLOTS ##############
-################################
+# In Species Distribution Modelling the norm is to retain predictors with VIFs of < 10. 
+#In other modelling areas, then ViFs of 3 or 5 are more normal.
 
-# Overall plots
-# Plot for number of calls per week
-p1 <- df_processed %>%
-  ggplot(aes(x = week, y = n_calls)) + 
-  geom_boxplot(fill = "blue", alpha = 0.5) +
-  theme(axis.text.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank()) +
-  ylab("N. Calls") 
-p1
+options(scipen = 999)
+set.seed(123) # Not certain if there is random process? Results seem to vary?
 
-# Plot for species richness per week
-p2 <- df_processed %>%
-  ggplot(aes(x = week, y = n_species)) + 
-  geom_boxplot(fill = "blue", alpha = 0.5) +
-  theme(axis.text.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank()) +
-  ylab("Sp. Rich") 
-p2
+PREDICTORS <- df_annotated %>% 
+  select(all_of(ACOUSTIC_VAR), doy, latitude) %>% 
+  drop_na()
 
-# Plot for functional number of species per week
-p4 <- df_processed %>%
-  ggplot(aes(x = week, y = hill_number)) + 
-  geom_boxplot(fill = "blue", alpha = 0.5) +
-  theme(axis.text.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank()) +
-  ylab("Hill Nb") 
-p4
+# Predictors can only be numeric
+VIF.STEP <- vifstep(PREDICTORS, th = 5)
+VIF.COR <- vifcor(PREDICTORS, th = 0.7)
 
-# Plot for indices
-p3 <- df_processed %>% 
-  pivot_longer(!c(n_calls, week, site), names_to = "indice", values_to = "value") %>% 
-  ggplot(aes(y = value, x=week)) + 
-  geom_boxplot(aes(color = indice, fill = indice), alpha = 0.7) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
-  xlab("Week") +
-  ylab("Value of Indice") +
-  facet_grid(rows = vars(indice), scales = "free_y")
-p3
-# Combine the overall plots
-(p1 / p2 / p4 / p3) + plot_layout(heights = c(1, 1, 1, 6))
+# Returns a VIF object, examine different outputs.
+VIF.STEP.MATRIX <- data.frame(VIF.STEP@corMatrix)
+VIF.COR.MATRIX <- data.frame(VIF.COR@corMatrix)
+
+# Check which variables are still included.
+colnames(PREDICTORS)
+row.names(VIF.STEP.MATRIX)
+row.names(VIF.COR.MATRIX)
+
+PREDICTORS <- PREDICTORS[VIF.STEP@results$Variables]
+ACOUSTIC_VAR_VIF <- PREDICTORS %>% 
+  select(all_of(ACOUSTIC_VAR[ACOUSTIC_VAR %in% colnames(PREDICTORS)]))
+
+ACOUSTIC_VAR_VIF <- colnames(ACOUSTIC_VAR_VIF)
+
+# Selection 
+ACOUSTIC_VAR_VIF <- ACOUSTIC_VAR
+
 
 #################################################################################
 # Make the df for number of calls, species richness and number of func. species #
@@ -131,21 +97,23 @@ p3
 df_model <- df_annotated %>% 
   mutate(tags = na_if(tags, "None")) %>%  # Convert "None" to NA
   filter(confidence > CONFIDENCE) %>% 
-  select(doy, week, site, all_of(ACOUSTIC_VAR), tags) %>% 
+  select(doy, latitude, week, site, all_of(ACOUSTIC_VAR_VIF), tags) %>% 
   mutate(tags_number = ifelse(is.na(tags), 0, 1)) %>% 
   group_by(doy, week, site) %>% 
-  summarise(across(all_of(ACOUSTIC_VAR), mean, na.rm=TRUE),
+  summarise(across(all_of(ACOUSTIC_VAR_VIF), mean, na.rm=TRUE),
             n_calls = sum(tags_number),
             n_species = n_distinct(tags, na.rm = TRUE),
-            hill_number = exp(diversity(table(tags), index = "shannon")))
+            latitude = mean(latitude), 
+            hill_number = exp(diversity(table(tags), index = "shannon"))) %>% 
+  drop_na()
 
 # Standardize acoustic variables
-preProcessParams <- preProcess(df_model[, ACOUSTIC_VAR], method = c("center", "scale"))
-df_model[, ACOUSTIC_VAR] <- predict(preProcessParams, df_model[, ACOUSTIC_VAR])
+preProcessParams <- preProcess(df_model[, ACOUSTIC_VAR_VIF], method = c("center", "scale"))
+df_model[, ACOUSTIC_VAR_VIF] <- predict(preProcessParams, df_model[, ACOUSTIC_VAR_VIF])
 
 # Add quadratic terms
 df_model <- df_model %>%
-  mutate(across(all_of(ACOUSTIC_VAR), ~ .^2, .names = "{.col}_sq"))
+  mutate(across(all_of(ACOUSTIC_VAR_VIF), ~ .^2, .names = "{.col}_sq"))
 
 # Site with the highest number of calls
 df_model %>% select(c(site, n_calls)) %>% arrange(desc(n_calls))
@@ -159,26 +127,30 @@ df_model <- df_model %>% filter(site %in% sufficient_sites)
 
 # Combine data for modeling
 df_model <- df_model %>%
-  select(week, site, hill_number, n_calls, n_species, all_of(ACOUSTIC_VAR), ends_with("_sq"))
+  select(doy, week, site, hill_number, n_calls, n_species, all_of(ACOUSTIC_VAR_VIF), ends_with("_sq"), latitude)
 
 ##########################################
 # Build the Mixed-Effects Models         #
 ##########################################
+HILL_FORMULA <- paste("hill_number~", paste(c(ACOUSTIC_VAR_VIF, df_model %>% ungroup() %>% select(ends_with("_sq")) %>% colnames(), "doy", "latitude", "(1|site)"), collapse="+"), sep="")
+N_CALL_FORMULA <- paste("n_calls~", paste(c(ACOUSTIC_VAR_VIF, df_model %>% ungroup() %>% select(ends_with("_sq")) %>% colnames(), "doy", "latitude", "(1|site)"), collapse="+"), sep="")
+N_SPECIES_FORMULA <- paste("n_species~", paste(c(ACOUSTIC_VAR_VIF, df_model %>% ungroup() %>% select(ends_with("_sq")) %>% colnames(), "doy", "latitude", "(1|site)"), collapse="+"), sep="")
 
-# Model for hill_number
-mixed_model_hill <- glmmTMB(hill_number ~ EVNsp + EVNsp_sq + MFC + MFC_sq + ROItotal + ROItotal_sq +
-                              ACI + ACI_sq + BI + BI_sq + roughness + roughness_sq + (1 | site),
-                            data = df_model)
+mixed_model_hill <- glmmTMB(as.formula(HILL_FORMULA),
+                            data = df_model,
+                            control = glmmTMBControl(optCtrl = list(iter.max = 1000, eval.max = 1000)),
+                            family = Gamma(link = "log"))
 
 # Model for n_calls
-mixed_model_calls <- glmmTMB(n_calls ~ EVNsp + EVNsp_sq + MFC + MFC_sq + ROItotal + ROItotal_sq +
-                               ACI + ACI_sq + BI + BI_sq + roughness + roughness_sq + (1 | site),
-                             data = df_model)
-
+mixed_model_calls <- glmmTMB(as.formula(N_CALL_FORMULA),
+                             data = df_model,
+                             control = glmmTMBControl(optCtrl = list(iter.max = 1000, eval.max = 1000)),
+                             family=poisson)
 # Model for n_species
-mixed_model_species <- glmmTMB(n_species ~ EVNsp + EVNsp_sq + MFC + MFC_sq + ROItotal + ROItotal_sq +
-                                 ACI + ACI_sq + BI + BI_sq + roughness + roughness_sq + (1 | site),
-                               data = df_model)
+mixed_model_species <- glmmTMB(as.formula(N_SPECIES_FORMULA),
+                               data = df_model,
+                               control = glmmTMBControl(optCtrl = list(iter.max = 1000, eval.max = 1000)),
+                               family = poisson)
 
 # Summarize the mixed-effects models
 summary(mixed_model_hill)
@@ -198,28 +170,36 @@ print(coefficients_species)
 ###################################
 
 # Predict and visualize for hill_number
-df_model$predicted_hill_number <- predict(mixed_model_hill, newdata = df_model, allow.new.levels = TRUE)
+hill_predictions <- predict(mixed_model_hill, newdata = df_model, allow.new.levels = TRUE, se.fit = TRUE)
+df_model$predicted_hill_number <- hill_predictions$fit
+df_model$hill_number_se <- hill_predictions$se.fit
 
 # Plot observed vs predicted for hill_number
 ggplot(df_model, aes(x = hill_number, y = predicted_hill_number)) +
   geom_point() +
+  geom_errorbar(aes(ymin = predicted_hill_number - 1.96 * hill_number_se,
+                    ymax = predicted_hill_number + 1.96 * hill_number_se), width = 0.2) +
   geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
   labs(x = "Observed Hill Number", y = "Predicted Hill Number") +
   theme_minimal()
 
 # Plot residuals for hill_number
-ggplot(df_model, aes(x = week, y = residuals(mixed_model_hill))) +
+ggplot(df_model, aes(x = doy, y = residuals(mixed_model_hill))) +
   geom_point() +
   geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
   labs(x = "Week", y = "Residuals") +
   theme_minimal()
 
 # Predict and visualize for n_calls
-df_model$predicted_n_calls <- predict(mixed_model_calls, newdata = df_model, allow.new.levels = TRUE)
+calls_predictions <- predict(mixed_model_calls, newdata = df_model, allow.new.levels = TRUE, se.fit = TRUE)
+df_model$predicted_n_calls <- calls_predictions$fit
+df_model$calls_se <- calls_predictions$se.fit
 
 # Plot observed vs predicted for n_calls
 ggplot(df_model, aes(x = n_calls, y = predicted_n_calls)) +
   geom_point() +
+  geom_errorbar(aes(ymin = predicted_n_calls - 1.96 * calls_se,
+                    ymax = predicted_n_calls + 1.96 * calls_se), width = 0.2) +
   geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
   labs(x = "Observed Number of Calls", y = "Predicted Number of Calls") +
   theme_minimal()
@@ -232,11 +212,15 @@ ggplot(df_model, aes(x = week, y = residuals(mixed_model_calls))) +
   theme_minimal()
 
 # Predict and visualize for n_species
-df_model$predicted_n_species <- predict(mixed_model_species, newdata = df_model, allow.new.levels = TRUE)
+species_predictions <- predict(mixed_model_species, newdata = df_model, allow.new.levels = TRUE, se.fit = TRUE)
+df_model$predicted_n_species <- species_predictions$fit
+df_model$species_se <- species_predictions$se.fit
 
 # Plot observed vs predicted for n_species
 ggplot(df_model, aes(x = n_species, y = predicted_n_species)) +
   geom_point() +
+  geom_errorbar(aes(ymin = predicted_n_species - 1.96 * species_se,
+                    ymax = predicted_n_species + 1.96 * species_se), width = 0.2) +
   geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
   labs(x = "Observed Number of Species", y = "Predicted Number of Species") +
   theme_minimal()
@@ -247,67 +231,4 @@ ggplot(df_model, aes(x = week, y = residuals(mixed_model_species))) +
   geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
   labs(x = "Week", y = "Residuals") +
   theme_minimal()
-
-##########################################
-# Save Plots Per Site                    #
-##########################################
-
-# Create a directory to save the plots
-dir.create("plots_per_site", showWarnings = FALSE)
-
-# Loop through each site and create a plot
-sites <- unique(df_model$site)
-for (site in sites) {
-  df_site_processed <- df_model %>% filter(site == !!site) 
-
-  p1_site <- df_site_processed %>%
-    ggplot(aes(x = doy)) + 
-    geom_point(aes(y=n_calls), fill = "blue", alpha = 0.5) +
-    geom_point(aes(y=predicted_n_calls), color="red")
-    theme(axis.text.x = element_blank(), 
-          axis.ticks.x = element_blank(),
-          axis.title.x = element_blank()) +
-    ylab("N. Calls") +
-    ggtitle(paste("Site:", site))
-
-  p2_site <- df_site_processed %>%
-    ggplot(aes(x = doy)) + 
-    geom_point(aes(y = n_species), fill = "blue", alpha = 0.5) +
-    geom_point(aes(y=predicted_n_species), color="red")
-    theme(axis.text.x = element_blank(), 
-          axis.ticks.x = element_blank(),
-          axis.title.x = element_blank()) +
-    ylab("Sp. Rich") +
-    ggtitle(paste("Site:", site))
-  
-  p4_site <- df_site_processed %>%
-    ggplot(aes(x = doy)) + 
-    geom_point(aes(y = hill_number), fill = "blue", alpha = 0.5) +
-    geom_point(aes(y=predicted_hill_number), color="red")
-    theme(axis.text.x = element_blank(), 
-          axis.ticks.x = element_blank(),
-          axis.title.x = element_blank()) +
-    ylab("Hill Nb") +
-    ggtitle(paste("Site:", site))
-
-  p3_site <- df_site_processed %>%
-    ungroup() %>% 
-    select(!c(week, hill_number, n_species, predicted_hill_number, predicted_n_calls, predicted_n_species)) %>% 
-    pivot_longer(!c(n_calls, doy, site), names_to = "indice", values_to = "value") %>% 
-    ggplot(aes(y = value, x = doy)) + 
-    geom_point(aes(color = indice, fill = indice), alpha = 0.7) +
-    geom_line(aes(color = indice, fill = indice, group = indice), alpha = 0.7) +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
-    xlab("Week") +
-    ylab("Value of Indice") +
-    facet_grid(rows = vars(indice), scales = "free_y") +
-    ggtitle(paste("Site:", site    )) +
-    ggtitle(paste("Site:", site))
-  
-  # Combine the plots for the site
-  combined_site_plot <- (p1_site / p2_site / p4_site / p3_site) + plot_layout(heights = c(1, 1, 1, 6))
-  
-  # Save the plot
-  ggsave(filename = paste0("plots_per_site/hill_number_site_", site, ".png"), plot = combined_site_plot, width = 20, height = 15)
-}
 
